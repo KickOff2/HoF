@@ -46946,8 +46946,9 @@ function admin(){cards([['Redigering',adminUnlocked?'Aktiv':'Låst','Kun denne b
  let v=siteSettings();$('#content').innerHTML=`<section class="panel section"><h2>🔄 Synkronisér Hall of Fame-Excel</h2><p class="note">Vælg din opdaterede .xlsm eller .xlsx-fil. Dashboardet læser Excel direkte i browseren, viser nye/ændrede kampe og finder afsluttede dashboardturneringer, der mangler i Excel. Det stopper, hvis kampidentiteter ikke matcher sikkert. Ingen data ændres ved gennemse eller historisk Excel-eksport. Eksportér bagefter den nye JSON-fil ved synkronisering.</p><div class="sync-modes"><label><input type="radio" name="syncMode" value="new" checked> Kun nye turneringer</label><label><input type="radio" name="syncMode" value="full"> Fuld synkronisering</label><label><input type="radio" name="syncMode" value="review"> Kun gennemse ændringer</label></div><p class="note">Fuld synkronisering foreslår sletning af Excel-kampe, der mangler i filen. Manuelt registrerede kampe bevares. Alle sletninger vises før godkendelse.</p><input type="file" id="syncExcelFile" accept=".xlsx,.xlsm"><button id="syncPreview" class="primary">Kontrollér Excel og vis ændringer</button><div id="syncReport" class="sync-report"></div></section><section class="panel section"><h2>⚙ Tilpas dashboard</h2><p class="note">Ændringer gemmes lokalt i browseren og følger med, når du eksporterer JSON. Brug flyttehåndtaget ⠿ eller pilene ↑ ↓ på boksene i de andre faner til at ændre rækkefølgen. Kun når administrationen er låst op kan boksene flyttes. Dette er ikke passwordbeskyttet administration.</p><div class="tc-odds-admin"><h3>🎲 Oddsindstillinger</h3><label><input type="checkbox" id="editOddsEnabled" ${v.oddsEnabled!==false?'checked':''}> Vis odds i Turneringscenter</label><label>Spilstyrke <select id="editHomeAdvantage"><option value="AB" ${v.homeAdvantage!=='equal'?'selected':''}>A &gt; B · hjemmebanefordel</option><option value="equal" ${v.homeAdvantage==='equal'?'selected':''}>A = B · ingen generel hjemmebanefordel</option></select></label><p class="note">Historiske hjemme-/uderesultater vises uanset indstilling. Odds er statistiske estimater og ikke bookmakerodds.</p></div><label class="field">Overskrift<input id="editHeading" maxlength="120" value="${esc(v.heading)}"></label><label class="field">Introtekst<textarea id="editIntro" rows="3" maxlength="600">${esc(v.intro)}</textarea></label><label class="field">Lille tekst over logo<input id="editTagline" maxlength="120" value="${esc(v.tagline)}"></label><div class="admin-actions"><button id="saveSite">Gem tekster</button><button id="resetLayout">Nulstil rækkefølge af bokse</button><button id="lockAdmin">Afslut redigering</button></div></section>`;
  const jsonImportPanel=document.createElement('section');jsonImportPanel.className='panel section';jsonImportPanel.innerHTML='<h2>↥ Indlæs JSON</h2><p class="note">Kun administrator. Importen bruger den eksisterende dubletkontrol og kan ændre de lokalt indlæste Hall of Fame-data.</p>';const jsonImportButton=document.createElement('button');jsonImportButton.textContent='↥ Indlæs JSON';jsonImportButton.onclick=()=>document.getElementById('loadbtn').click();jsonImportPanel.appendChild(jsonImportButton);$('#content').appendChild(jsonImportPanel);
  const releasePanel=document.createElement('section');releasePanel.className='panel section';
- releasePanel.innerHTML='<h2>🔐 Officiel frigivelse i Supabase</h2><p class="note">Kun administrator. Godkendte, rigtige turneringer kan frigives efter serverens historiske dubletkontrol. Testturneringer kan aldrig frigives. Frigivelse ændrer ikke de lokale Excel-filer.</p><button id="ko2ReleaseLoad" class="primary">Hent godkendte rigtige turneringer</button><div id="ko2ReleaseList" class="section note" aria-live="polite">Ingen turneringer hentet.</div><button id="ko2ReleaseRefresh">Opdatér officielle Hall of Fame-statistikker</button>';
+ releasePanel.innerHTML='<h2>🔐 Officiel frigivelse i Supabase</h2><p class="note">Kun administrator. Godkendte, rigtige turneringer kan frigives efter serverens historiske dubletkontrol. Testturneringer kan aldrig frigives. Frigivelse ændrer ikke de lokale Excel-filer.</p><h3>Afventer administratorgodkendelse</h3><p class="note">Kontrollér turnering og antal kampe, før du godkender. Godkendelse føjer ikke turneringen til Hall of Fame.</p><button id="ko2PendingLoad" class="primary">Hent turneringer til godkendelse</button><div id="ko2PendingList" class="section note" aria-live="polite">Ingen turneringer hentet.</div><h3>Officiel frigivelse</h3><button id="ko2ReleaseLoad" class="primary">Hent godkendte rigtige turneringer</button><div id="ko2ReleaseList" class="section note" aria-live="polite">Ingen turneringer hentet.</div><button id="ko2ReleaseRefresh">Opdatér officielle Hall of Fame-statistikker</button>';
  $('#content').appendChild(releasePanel);
+ document.getElementById('ko2PendingLoad').onclick=ko2AdminLoadPending;
  document.getElementById('ko2ReleaseLoad').onclick=ko2AdminLoadReleaseCandidates;
  document.getElementById('ko2ReleaseRefresh').onclick=()=>ko2RefreshOfficial(true);
  const ko2LogoutButton=document.createElement('button');ko2LogoutButton.textContent='Log ud af administrator';ko2LogoutButton.onclick=ko2AdminDirectLogout;$('#content').prepend(ko2LogoutButton);
@@ -47994,6 +47995,57 @@ async function ko2RefreshOfficial(showNotice=false){
   if(showNotice)alert('Opdateret: '+onlineT.length+' serverfrigivne turneringer og '+onlineM.length+' kampe vises i Hall of Fame. '+skipped+' tilbageholdt. Historisk arkiv og Excel er uændret.');
  }catch(e){if(showNotice)alert('Kunne ikke hente officielle turneringer: '+e.message);else console.warn('Officiel onlinevisning:',e.message)}
  finally{ko2ReleaseFetchBusy=false}
+}
+async function ko2AdminLoadPending(){
+ const out=document.getElementById('ko2PendingList');if(!out)return;
+ out.textContent='Henter turneringer, der afventer godkendelse…';
+ try{
+  if(!adminUnlocked)throw Error('Log ind som administrator først.');
+  await ko2VerifyAdmin();
+  const client=await ko2Client();
+  const {data,error}=await client.from('ko2_tournaments')
+   .select('id,public_id,payload,status,revision').eq('status','pending').order('created_at',{ascending:true}).limit(500);
+  if(error)throw error;
+  const items=(data||[]).filter(t=>t.payload?.kind==='tc-v1');
+  out.replaceChildren();
+  if(!items.length){out.textContent='Ingen turneringer afventer godkendelse.';return}
+  for(const t of items){
+   const card=document.createElement('div');card.className='panel section';
+   const heading=document.createElement('strong');heading.textContent=String(t.payload?.name||t.public_id||'Ukendt turnering');card.appendChild(heading);
+   const info=document.createElement('p');info.className='note';
+   info.textContent='ID: '+String(t.payload?.sourceId||t.public_id)+' · '+(t.payload?.isTest===false?'Rigtig turnering':'TESTTURNERING')+' · Dato: '+String(t.payload?.date||'ukendt');card.appendChild(info);
+   const detail=document.createElement('p');detail.className='note';detail.textContent='Kontrollerer kampe…';card.appendChild(detail);
+   const controls=document.createElement('div');controls.style.cssText='display:flex;gap:8px;flex-wrap:wrap';
+   const approve=document.createElement('button');approve.className='primary';approve.textContent='Godkend turnering';approve.disabled=true;
+   const reject=document.createElement('button');reject.textContent='Afvis turnering';reject.disabled=true;
+   controls.append(approve,reject);card.appendChild(controls);out.appendChild(card);
+   try{
+    const {data:matches,error:me}=await client.from('ko2_matches').select('id,match_key,payload').eq('tournament_id',t.id).limit(1000);
+    if(me)throw me;
+    const count=matches?.length||0;
+    const valid=count>0&&count<1000&&matches.every(m=>m.payload&&typeof m.payload==='object'&&String(m.payload.home||'').trim()&&String(m.payload.away||'').trim()&&Number.isInteger(Number(m.payload.hg))&&Number.isInteger(Number(m.payload.ag)));
+    detail.textContent=count+' kampe registreret i Supabase'+(valid?' · Klar til administrativ vurdering':' · Manglende/ugyldige kampdata – kan ikke godkendes');
+    if(!valid)continue;
+    approve.disabled=false;reject.disabled=false;
+    const change=async(next)=>{
+     const name=String(t.payload?.name||t.public_id);
+     if(!confirm((next==='approved'?'Godkend':'Afvis')+' '+name+' med '+count+' kampe? '+(next==='approved'?'Turneringen frigives IKKE automatisk.':'')))return;
+     approve.disabled=true;reject.disabled=true;
+     try{
+      await ko2VerifyAdmin();
+      const c=await ko2Client();
+      const {data:updated,error:e}=await c.from('ko2_tournaments')
+       .update({status:next,revision:t.revision+1}).eq('id',t.id).eq('status','pending').eq('revision',t.revision).select('id');
+      if(e)throw e;
+      if(!updated?.length)throw Error('Turneringen er allerede ændret. Hent listen igen.');
+      alert(next==='approved'?'Turneringen er godkendt, men endnu ikke officielt frigivet.':'Turneringen er afvist.');
+      await ko2AdminLoadPending();
+     }catch(e){alert('Status kunne ikke ændres: '+e.message);approve.disabled=false;reject.disabled=false}
+    };
+    approve.onclick=()=>change('approved');reject.onclick=()=>change('rejected');
+   }catch(e){detail.textContent='Kunne ikke kontrollere kampe: '+e.message}
+  }
+ }catch(e){out.textContent='Kunne ikke hente godkendelseskøen: '+e.message}
 }
 async function ko2AdminLoadReleaseCandidates(){
  const out=document.getElementById('ko2ReleaseList');if(!out)return;
