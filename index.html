@@ -47551,8 +47551,27 @@ async function ko2Client(){
  }
  return window.supabase.createClient(config.url,config.key,{auth:{storageKey:'ko2-v69-test-auth',persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});
 }
+var ko2DraftCheckBusy=false,ko2SubmitBusy=false;
+async function ko2FindSubmittedDraft(t,client){
+ const {data,error}=await client.from('ko2_tournaments').select('id,status,payload').eq('payload->>sourceId',String(t.id)).in('status',['pending','approved','rejected']);
+ if(error)throw error;
+ const found=(data||[]).find(r=>r.payload?.kind==='tc-v1');if(found)return found;
+ const release=await client.from('ko2_official_releases').select('public_id').eq('tournament_payload->>sourceId',String(t.id)).limit(1);
+ if(release.error)throw release.error;return release.data?.[0]||null;
+}
+function ko2ClearSubmittedDraft(t){
+ tcLoad();if(!tcState||tcState.id!==t.id)return;
+ tcState=null;tcSelectedMatchIndex=null;tcSave();if(tab==='center')render();
+}
+async function ko2CheckDraft(t){
+ if(ko2DraftCheckBusy||ko2SubmitBusy)return;
+ ko2DraftCheckBusy=true;
+ try{const client=await ko2Client();if(await ko2FindSubmittedDraft(t,client))ko2ClearSubmittedDraft(t);}
+ catch(e){console.warn('Kontrol af indsendt kladde:',e.message)}finally{ko2DraftCheckBusy=false}
+}
 async function ko2SubmitCenterTournament(t,isTest=true){
  const client=await ko2Client();
+ if(await ko2FindSubmittedDraft(t,client))return;
  const st=tcStandings(t);
  const id='TC-'+String(t.id||'').replace(/[^a-zA-Z0-9_-]/g,'-').slice(0,45)+'-'+crypto.randomUUID().slice(0,8);
  const payload={kind:'tc-v1',isTest:isTest!==false,name:t.name||t.id,sourceId:t.id,date:t.date,players:Object.values(t.teamPlayers||{}),duration:t.duration,playerCount:t.count,teams:t.teams,teamPlayers:t.teamPlayers,standings:st.map((x,i)=>({player:t.teamPlayers?.[x.team]||x.team,team:x.team,position:i+1}))};
@@ -47571,7 +47590,7 @@ async function ko2SubmitCenterTournament(t,isTest=true){
  }catch(e){throw Error('Turneringen '+id+' blev oprettet, men ikke færdigsendt. Gem ID og kontakt administrator. '+e.message)}
 }
 function center(){tcLoad();if(!tcState){cards([['Turneringscenter','2–4','Klubhold'],['Runder','Valgfrit','Alle mod alle'],['Hall of Fame','Adskilt','Indtil godkendelse']]);$('#content').innerHTML=panel('🏆 Opret turnering',`<form id="tcNew"><div class="formgrid">${tcInput('Turnerings-ID / navn','name',new Date().toISOString().slice(0,10)+'-01')}${tcInput('Dato','date',new Date().toISOString().slice(0,10),'date')}<label>Antal hold<select id="tcCount" name="count"><option>2</option><option>3</option><option selected>4</option></select></label>${tcInput('Antal gennemløb af alle mod alle','cycles',2,'number','min="1" max="40"')}${tcDurationSelect('duration','2x3')}<div id="tcTeams">${tcTeamFields(4)}</div></div><p class="note">Vælg først spilleren og derefter eventuelt et eksisterende alias / klubnavn. Uden alias bruges spillerens navn i turneringsprogram og Excel-eksport. Nye aliaser oprettes kun under Spillere & klubber, så stavefejl ikke skaber nye navne.</p><p class="note">Et gennemløb betyder én kamp mellem hvert par hold: 2 hold = 1 kamp, 3 hold = 3 kampe, 4 hold = 6 kampe. Eksempel: 3 hold og 18 kampe kræver 6 gennemløb. 4 hold spiller 2 kampe pr. runde over 3 runder pr. gennemløb; 3 hold spiller 1 kamp pr. runde over 3 runder. Hjemme/ude byttes ved hvert andet gennemløb. Kamplængde kan ændres for hver kamp.</p><button class="primary">Start turnering</button></form>`,true);let count=$('#tcCount');tcWireTeamFields();count.onchange=()=>{$('#tcTeams').innerHTML=tcTeamFields(+count.value);tcWireTeamFields();$('#tcNew [name=duration]').value=+count.value===2?'2x5':'2x3'};$('#tcNew').onsubmit=e=>{e.preventDefault();let f=new FormData(e.currentTarget),count=+f.get('count'),playersChosen=Array.from({length:count},(_,i)=>String(f.get('player'+(i+1))||'').trim()),teams=playersChosen.map((player,i)=>String(f.get('alias'+(i+1))||'').trim()||player),teamPlayers=Object.fromEntries(teams.map((team,i)=>[team,playersChosen[i]])),cycles=+f.get('cycles'),name=String(f.get('name')||'').trim(),date=String(f.get('date')||'');if(!name)return alert('Udfyld et turneringsnavn');if(playersChosen.some(x=>!x))return alert('Vælg en spiller for hvert hold');if(new Set(playersChosen).size!==count)return alert('Hvert hold skal være knyttet til sin egen spiller');if(teams.some((team,i)=>team!==playersChosen[i]&&!(db.playerAliases?.[playersChosen[i]]||[]).includes(team)))return alert('Vælg kun eksisterende aliaser fra listen');if(new Set(teams.map(x=>x.toLowerCase())).size!==count)return alert('To hold har samme navn. Vælg forskellige aliaser eller brug spillernavnene');if(db.tournaments.some(x=>x.id===name))return alert('Turnerings-ID findes allerede i Hall of Fame');if(!Number.isInteger(cycles)||cycles<1||cycles>40)return alert('Vælg 1–40 gennemløb');if(!tcDurations.includes(String(f.get('duration'))))return alert('Ugyldig kamplængde');tcSelectedMatchIndex=null;tcState={id:name,date,teams,teamPlayers,count,cycles,duration:String(f.get('duration')),matches:tcSchedule(teams,cycles),status:'draft'};tcSave();render()};return}
- let t=tcState,played=t.matches.filter(x=>x.played).length,stand=tcStandings(t);cards([['Turnering',t.id,'Kladde'],['Kampe',played+' / '+t.matches.length,'Registreret'],['Kamplængde',t.duration,'Standard; kan ændres'],['Status','Ikke offentliggjort','Hall of Fame er uændret']],true);
+ let t=tcState;void ko2CheckDraft(t);let played=t.matches.filter(x=>x.played).length,stand=tcStandings(t);cards([['Turnering',t.id,'Kladde'],['Kampe',played+' / '+t.matches.length,'Registreret'],['Kamplængde',t.duration,'Standard; kan ændres'],['Status','Ikke offentliggjort','Hall of Fame er uændret']],true);
  $('#cards').insertAdjacentHTML('beforeend',`<div class="card tc-popout-summary-card"><div class="lbl">Live turneringsoversigt</div><button id="tcOpenPopout" type="button" class="tc-popout-summary-btn">▣ Åbn i nyt vindue</button><small>Vis stilling på skærm 2</small></div>`);
  let rows=t.matches.map((m,i)=>`<tr><td>${esc(m.round)}</td><td>${esc(m.home)}</td><td>${esc(m.away)}</td><td>${m.played?esc(m.finalH+'–'+m.finalA):'—'}${m.played&&(m.extra||m.penalties||m.esc==='Opgivet'||m.esc==='Ja')?` <span class="tc-match-flags">${m.extra?'<span class="tc-match-flag" title="Forlænget spilletid">ET</span>':''}${m.penalties?'<span class="tc-match-flag" title="Straffespark">P</span>':''}${m.esc==='Opgivet'||m.esc==='Ja'?'<span class="tc-match-flag tc-match-esc" title="Kamp opgivet">ESC</span>':''}</span>`:''}</td><td>${m.played?(m.halfH==null||m.halfA==null?'Ukendt':esc(m.halfH+'–'+m.halfA)):'—'}</td><td><button class="tcEdit" data-index="${i}">${m.played?'Ret':'Indtast'}</button></td></tr>`).join('');
  $('#content').innerHTML=`<div class="grid"><div id="tcHighlights" class="tc-highlights-wrap">${tcMatchHighlights(t,tcSelectedMatchIndex)}</div>${tcStatsPanel(t)}${panel('Kampoversigt',`<div class="tablewrap"><table><thead><tr><th>Gennemløb</th><th>Hjemme</th><th>Ude</th><th>Slut</th><th>1. halvleg</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`,true)}<section class="panel wide" id="tcEditor"></section>${panel('Turneringskontrol',`<p><b>${played} af ${t.matches.length}</b> kampe færdige.${t.endedEarly?' <strong>Turneringen er afkortet.</strong>':''}</p><p class="note">Resultaterne er kun en kladde, indtil du godkender afslutning. Eksport til din oprindelige Excel-skabelon bevarer formler og makroer, når den valgte skabelon har plads til alle kampe.</p><div class="tc-cycle-controls" style="margin:16px 0;padding:14px;border:1px solid var(--line,#345244);border-radius:12px"><h3 style="margin:0 0 8px">🔄 Tilpas turnering undervejs</h3><p class="note">${t.count} hold: ${tcMatchesPerCycle(t.count)} kampe pr. gennemløb. Planlagt: ${t.matches.length} kampe${t.endedEarly?' · afsluttet før tid':''}. Tilføj ekstra gennemløb uden at ændre spillede resultater.</p><div class="admin-actions"><label>Ekstra gennemløb <input id="tcExtraCycles" type="number" min="1" max="${Math.max(1,40-(t.cycles||0))}" value="1" style="max-width:90px"></label><button id="tcExtend" type="button" ${t.endedEarly||Number(t.cycles)>=40?'disabled':''}>➕ Forlæng turnering</button><button id="tcEndEarly" type="button" ${!played||played===t.matches.length?'disabled':''}>🏁 Afslut før tid</button></div><p class="note">Afslut før tid fjerner kun uspillede kampe. Allerede registrerede kampe beholdes. Ved en ufuldstændig turnering kan holdene have spillet forskelligt antal kampe.</p></div><label>Vælg original ${t.count}-personers Excel-skabelon (.xlsm)<input type="file" id="tcTemplate" accept=".xlsm"></label><div class="admin-actions"><button id="tcExport" class="primary">Eksportér turneringsfil (.xlsm)</button><button id="tcBackup">Gem kladde (JSON)</button></div><p class="note">Eksporten bevarer Excel-formler og makroer, rydder forældede formelresultater og beder Excel genberegne ved åbning. Kontroller resultatet i Excel inden import til Hall of Fame.</p><button id="tcFinish" class="primary" ${played!==t.matches.length?'disabled':''}>Send til administratorgodkendelse</button><button id="tcReset">Slet kladde / start ny turnering</button>`,true)}</div>`;
@@ -47592,11 +47611,14 @@ function center(){tcLoad();if(!tcState){cards([['Turneringscenter','2–4','Klub
  if(db.tournaments.some(x=>x.id===t.id))return alert('Turneringen findes allerede i Hall of Fame.');
  const isTest=document.getElementById('ko2RealChoice')?.value!=='real';
  if(!confirm('Send '+(isTest?'TESTTURNERING':'RIGTIG TURNERING')+' med '+t.matches.length+' kampe til administratorgodkendelse? Den føjes IKKE til Hall of Fame endnu.'))return;
- const btn=document.getElementById('tcFinish');btn.disabled=true;
+ if(ko2SubmitBusy)return;
+ const btn=document.getElementById('tcFinish');btn.disabled=true;ko2SubmitBusy=true;
+ const controls=[...document.querySelectorAll('#content button,#content input,#content select')].filter(x=>!x.disabled);controls.forEach(x=>x.disabled=true);
  try{
-  await ko2SubmitCenterTournament(t,isTest);
-  alert('Turneringen er sendt til godkendelse online. Den er endnu ikke føjet til Hall of Fame. Din lokale kladde er bevaret.');
- }catch(e){alert('Kunne ikke sende turneringen: '+e.message)}finally{btn.disabled=false}
+  const submit=async()=>{await ko2SubmitCenterTournament(t,isTest);ko2ClearSubmittedDraft(t);};
+  if(navigator.locks?.request)await navigator.locks.request('ko2-submit-'+t.id,submit);else await submit();
+  alert('Turneringen er registreret online og er fjernet fra den aktive turneringsoversigt.');
+ }catch(e){alert('Kunne ikke sende turneringen: '+e.message)}finally{ko2SubmitBusy=false;controls.forEach(x=>x.disabled=false);btn.disabled=false}
 };
 }
 function tcScrollToMatchEditor(){
